@@ -4,13 +4,28 @@ from flask_cors import CORS
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
-PUBLIC_DIR = os.path.join(PROJECT_ROOT, 'templates')
+PUBLIC_DIR = os.path.join(BASE_DIR, '')  # Current directory for static files
 
-sys.path.append(PROJECT_ROOT)
-from app_settings import config_api as config
+sys.path.append(BASE_DIR)
+import config_api as config
 
-app = Flask(__name__, static_folder=PUBLIC_DIR, static_url_path='')
+app = Flask(__name__, static_folder=BASE_DIR, static_url_path='')
 CORS(app)
+
+rates = {}
+
+def fetch_rates():
+    global rates
+    try:
+        curr_req = requests.get(f"{config.CURRENCY_API}/USD", timeout=10)
+        curr_req.raise_for_status()
+        curr_data = curr_req.json()
+        rates = curr_data.get('rates', {})
+        rates['USD'] = 1.0  # Ensure USD is 1
+        print(f"Rates fetched: {len(rates)} currencies")
+    except Exception as e:
+        print(f"Error fetching rates: {e}")
+        rates = {}
 
 @app.route('/')
 def home():
@@ -19,11 +34,7 @@ def home():
 @app.route('/api/init-data')
 def init_data():
     try:
-        print("Fetching currencies...")
-        curr_req = requests.get(f"{config.CURRENCY_API}/USD", timeout=10)
-        curr_req.raise_for_status()
-        curr_data = curr_req.json()
-        print(f"Currencies fetched: {len(curr_data.get('rates', {}))} rates")
+        fetch_rates()
         
         print("Fetching crypto...")
         crypto_req = requests.get(config.CRYPTO_API, timeout=10)
@@ -31,7 +42,7 @@ def init_data():
         crypto_data = crypto_req.json()
         print("Crypto fetched")
         
-        return jsonify({"currencies": curr_data.get('rates', {}), "crypto": crypto_data})
+        return jsonify({"currencies": rates, "crypto": crypto_data})
     except requests.exceptions.RequestException as e:
         print(f"API request error: {e}")
         return jsonify({"error": f"API request failed: {str(e)}"}), 500
@@ -47,14 +58,19 @@ def convert():
         to = request.args.get('to', 'PKR')
         
         print(f"Converting {amt} {frm} to {to}")
-        r = requests.get(f"{config.CURRENCY_API}/{frm}", timeout=10)
-        r.raise_for_status()
-        data = r.json()
         
-        if 'rates' not in data or to not in data['rates']:
-            raise ValueError(f"Invalid currency code: {to}")
+        if not rates:
+            fetch_rates()
+            if not rates:
+                raise ValueError("Unable to fetch rates")
         
-        rate = data['rates'][to]
+        if frm not in rates or to not in rates:
+            raise ValueError(f"Invalid currency code: {frm} or {to}")
+        
+        if frm == 'USD':
+            rate = rates[to]
+        else:
+            rate = rates[to] / rates[frm]
         
         # Transform: Simulate 10-point Trend Graph data
         trend = [round(rate * (1 + random.uniform(-0.02, 0.02)), 4) for _ in range(10)]
@@ -70,9 +86,6 @@ def convert():
     except ValueError as e:
         print(f"Value error: {e}")
         return jsonify({"success": False, "error": str(e)})
-    except requests.exceptions.RequestException as e:
-        print(f"API request error: {e}")
-        return jsonify({"success": False, "error": f"API request failed: {str(e)}"})
     except Exception as e:
         print(f"Unexpected error: {e}")
         return jsonify({"success": False, "error": f"Unexpected error: {str(e)}"})
